@@ -411,7 +411,7 @@ void vita_ime_event_handler(void *arg, const SceImeEventData *e) {
 			} else {
 				String character;
 				utf16_to_utf8((uint16_t *)&libime_out[2], utf8_buffer);
-				character.parse_utf8(utf8_buffer);
+				character.parse_utf8((const char *)utf8_buffer);
 				OS_Vita::get_singleton()->key(character[0], true);
 				OS_Vita::get_singleton()->key(character[0], false);
 				sceClibMemset(&caret_rev, 0, sizeof(SceImeCaret));
@@ -453,7 +453,7 @@ int OS_Vita::get_virtual_keyboard_height() const {
 	return (int)libime_height;
 }
 
-void OS_Vita::show_virtual_keyboard(const String &p_existing_text, const Rect2 &p_screen_rect, bool p_multiline, int p_max_input_length, int p_cursor_start, int p_cursor_end) {
+void OS_Vita::show_virtual_keyboard(const String &p_existing_text, const Rect2 &p_screen_rect, VirtualKeyboardType p_type, int p_max_input_length, int p_cursor_start, int p_cursor_end) {
 	if (!libime_active) {
 		SceImeParam param;
 		sceImeParamInit(&param);
