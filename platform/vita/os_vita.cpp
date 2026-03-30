@@ -391,38 +391,62 @@ void utf16_to_utf8(const uint16_t *src, uint8_t *dst) {
 	*dst = '\0';
 }
 
-static char libime_initval[8] = { 1 };
+static SceWChar16 libime_initval[1] = { 0 };
 static unsigned int libime_height = 0;
-static char libime_out[SCE_IME_MAX_PREEDIT_LENGTH * 2 + 8];
+static SceWChar16 libime_out[SCE_IME_MAX_TEXT_LENGTH + 1];
 static unsigned int libime_work[SCE_IME_WORK_BUFFER_SIZE / sizeof(unsigned int)];
 static SceImeCaret caret_rev;
+static uint32_t libime_prev_committed_len = 0; // Track length of previously committed text
 
 void vita_ime_event_handler(void *arg, const SceImeEventData *e) {
-	uint8_t utf8_buffer[SCE_IME_MAX_TEXT_LENGTH] = { '\0' };
+	uint8_t utf8_buffer[SCE_IME_MAX_TEXT_LENGTH * 4] = { '\0' };
 	switch (e->id) {
 		case SCE_IME_EVENT_OPEN:
 			libime_height = e->param.rect.height;
+			libime_prev_committed_len = 0;
 			break;
-		case SCE_IME_EVENT_UPDATE_TEXT:
-			if (e->param.text.caretIndex == 0) {
-				OS_Vita::get_singleton()->key(KEY_BACKSPACE, true);
-				OS_Vita::get_singleton()->key(KEY_BACKSPACE, false);
-				sceImeSetText((SceWChar16 *)libime_initval, 4);
-			} else {
-				String character;
-				utf16_to_utf8((uint16_t *)&libime_out[2], utf8_buffer);
-				character.parse_utf8((const char *)utf8_buffer);
-				OS_Vita::get_singleton()->key(character[0], true);
-				OS_Vita::get_singleton()->key(character[0], false);
-				sceClibMemset(&caret_rev, 0, sizeof(SceImeCaret));
-				caret_rev.index = 1;
-				sceImeSetCaret(&caret_rev);
-				sceImeSetText((SceWChar16 *)libime_initval, 4);
+		case SCE_IME_EVENT_UPDATE_TEXT: {
+			// If preeditLength > 0, the user is still composing (e.g. CJK input).
+			// Do not commit text or reset the buffer until composition is finished.
+			if (e->param.text.preeditLength > 0) {
+				break;
 			}
+
+			// Calculate the length of committed text (total text minus preedit)
+			uint32_t total_len = 0;
+			while (libime_out[total_len] != 0) {
+				total_len++;
+			}
+
+			if (total_len < libime_prev_committed_len) {
+				// Text got shorter: user pressed backspace
+				uint32_t deleted = libime_prev_committed_len - total_len;
+				for (uint32_t i = 0; i < deleted; i++) {
+					OS_Vita::get_singleton()->key(KEY_BACKSPACE, true);
+					OS_Vita::get_singleton()->key(KEY_BACKSPACE, false);
+				}
+				libime_prev_committed_len = total_len;
+			} else if (total_len > libime_prev_committed_len) {
+				// New characters were committed — extract only the new portion
+				utf16_to_utf8((uint16_t *)&libime_out[libime_prev_committed_len], utf8_buffer);
+				String new_text;
+				new_text.parse_utf8((const char *)utf8_buffer);
+				for (int i = 0; i < new_text.length(); i++) {
+					OS_Vita::get_singleton()->key(new_text[i], true);
+					OS_Vita::get_singleton()->key(new_text[i], false);
+				}
+				libime_prev_committed_len = total_len;
+			}
+			// If total_len == libime_prev_committed_len, nothing changed (e.g. caret move)
+			break;
+		}
+		case SCE_IME_EVENT_CHANGE_SIZE:
+			libime_height = e->param.rect.height;
 			break;
 		case SCE_IME_EVENT_PRESS_ENTER:
 			OS_Vita::get_singleton()->key(KEY_ENTER, true);
 			OS_Vita::get_singleton()->key(KEY_ENTER, false);
+			break;
 		case SCE_IME_EVENT_PRESS_CLOSE:
 			libime_active = false;
 			libime_height = 0;
@@ -458,17 +482,24 @@ void OS_Vita::show_virtual_keyboard(const String &p_existing_text, const Rect2 &
 		SceImeParam param;
 		sceImeParamInit(&param);
 
-		sceClibMemset(libime_out, 0, (SCE_IME_MAX_PREEDIT_LENGTH * 2 + 6));
+		sceClibMemset(libime_out, 0, sizeof(libime_out));
+		libime_prev_committed_len = 0;
 
-		param.supportedLanguages = SCE_IME_LANGUAGE_ENGLISH;
-		param.languagesForced = false;
+		param.supportedLanguages = SCE_IME_LANGUAGE_DANISH | SCE_IME_LANGUAGE_GERMAN | SCE_IME_LANGUAGE_ENGLISH |
+				SCE_IME_LANGUAGE_SPANISH | SCE_IME_LANGUAGE_FRENCH | SCE_IME_LANGUAGE_ITALIAN |
+				SCE_IME_LANGUAGE_DUTCH | SCE_IME_LANGUAGE_NORWEGIAN | SCE_IME_LANGUAGE_POLISH |
+				SCE_IME_LANGUAGE_PORTUGUESE | SCE_IME_LANGUAGE_RUSSIAN | SCE_IME_LANGUAGE_FINNISH |
+				SCE_IME_LANGUAGE_SWEDISH | SCE_IME_LANGUAGE_JAPANESE | SCE_IME_LANGUAGE_KOREAN |
+				SCE_IME_LANGUAGE_SIMPLIFIED_CHINESE | SCE_IME_LANGUAGE_TRADITIONAL_CHINESE |
+				SCE_IME_LANGUAGE_PORTUGUESE_BR | SCE_IME_LANGUAGE_ENGLISH_GB | SCE_IME_LANGUAGE_TURKISH;
+		param.languagesForced = true;
 		param.type = SCE_IME_TYPE_DEFAULT;
-		param.option = SCE_IME_OPTION_NO_ASSISTANCE;
-		param.inputTextBuffer = (SceWChar16 *)libime_out;
-		param.maxTextLength = 4;
+		param.option = 0;
+		param.inputTextBuffer = libime_out;
+		param.maxTextLength = SCE_IME_MAX_TEXT_LENGTH;
 		param.handler = vita_ime_event_handler;
 		param.filter = NULL;
-		param.initialText = (SceWChar16 *)libime_initval;
+		param.initialText = libime_initval;
 		param.arg = NULL;
 		param.work = libime_work;
 
